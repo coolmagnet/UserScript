@@ -1,0 +1,219 @@
+// ==UserScript==
+// @name         YouTube AntiTranslate
+// @namespace    https://github.com/zpix1/yt-anti-translate
+// @version      1.0
+// @description  Disables YouTube auto-translation for video titles and audio tracks
+// @author       Original: zpix1 | Forked: coolmagnet
+// @match        https://www.youtube.com/*
+// @grant        none
+// @downloadURL  https://raw.githubusercontent.com/coolmagnet/UserScript/main/AntiTranslate
+// @updateURL    https://raw.githubusercontent.com/coolmagnet/UserScript/main/AntiTranslate
+// ==/UserScript==
+
+// Cache for oEmbed API responses
+const cache = new Map();
+
+// Fetch oEmbed data with caching
+async function fetchOembed(url) {
+  if (cache.has(url)) return cache.get(url);
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      if (response.status === 404 || response.status === 401) {
+        cache.set(url, null);
+        return null;
+      }
+      throw new Error(`HTTP error: ${response.status}`);
+    }
+    const data = await response.json();
+    cache.set(url, data);
+    return data;
+  } catch (error) {
+    console.error('[AntiTranslate] Fetch error:', error);
+    return null;
+  }
+}
+
+// Normalize titles for comparison
+function normalizeTitle(title) {
+  return title.replace(/\s/g, '');
+}
+
+// Untranslate current video title
+async function untranslateCurrentVideo() {
+  const titleElement = document.querySelector('#title > h1 > yt-formatted-string') ||
+                      document.querySelector('h1 > yt-formatted-string');
+  if (!titleElement || !titleElement.textContent || titleElement.dataset.ytatUntranslated) return;
+
+  const response = await fetchOembed(`https://www.youtube.com/oembed?url=${document.location.href}`);
+  if (!response || !response.title) {
+    titleElement.dataset.ytatUntranslated = 'checked';
+    return;
+  }
+
+  const realTitle = response.title;
+  const currentTitle = titleElement.textContent.trim();
+  if (realTitle && currentTitle && normalizeTitle(realTitle) !== normalizeTitle(currentTitle)) {
+    console.log(`[AntiTranslate] Untranslating video: "${currentTitle}" -> "${realTitle}"`);
+    titleElement.textContent = realTitle;
+    document.title = document.title.replace(currentTitle, realTitle);
+    titleElement.dataset.ytatUntranslated = 'true';
+  } else {
+    titleElement.dataset.ytatUntranslated = 'true';
+  }
+}
+
+// Untranslate current Short title
+async function untranslateCurrentShort() {
+  if (!window.location.pathname.startsWith('/shorts/')) return;
+  const titleElement = document.querySelector('yt-shorts-video-title-view-model > h2 > span');
+  if (!titleElement || !titleElement.textContent || titleElement.dataset.ytatUntranslated) return;
+
+  const videoId = window.location.pathname.split('/')[2];
+  if (!videoId) return;
+
+  const response = await fetchOembed(`https://www.youtube.com/oembed?url=https://www.youtube.com/shorts/${videoId}`);
+  if (!response || !response.title) {
+    titleElement.dataset.ytatUntranslated = 'checked';
+    return;
+  }
+
+  const realTitle = response.title;
+  const currentTitle = titleElement.textContent.trim();
+  if (realTitle && currentTitle && normalizeTitle(realTitle) !== normalizeTitle(currentTitle)) {
+    console.log(`[AntiTranslate] Untranslating Short: "${currentTitle}" -> "${realTitle}"`);
+    titleElement.textContent = realTitle;
+    document.title = document.title.replace(currentTitle, realTitle) || `${realTitle} #shorts`;
+    titleElement.dataset.ytatUntranslated = 'true';
+  } else {
+    titleElement.dataset.ytatUntranslated = 'true';
+  }
+}
+
+// Untranslate other videos (homepage, subscriptions, etc.)
+async function untranslateOtherVideos() {
+  const videos = document.querySelectorAll('ytd-video-renderer, ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer');
+  for (const video of videos) {
+    if (video.dataset.ytatUntranslated) continue;
+    const linkElement = video.querySelector('a#video-title-link') || video.querySelector('a#thumbnail') || video.querySelector('ytd-thumbnail a');
+    const titleElement = video.querySelector('#video-title') || video.querySelector('yt-formatted-string#video-title');
+    if (!linkElement || !titleElement || !linkElement.href) {
+      video.dataset.ytatUntranslated = 'checked';
+      continue;
+    }
+
+    const response = await fetchOembed(`https://www.youtube.com/oembed?url=${encodeURIComponent(linkElement.href)}`);
+    if (!response || !response.title) {
+      video.dataset.ytatUntranslated = 'checked';
+      continue;
+    }
+
+    const realTitle = response.title;
+    const currentTitle = titleElement.innerText.trim();
+    if (realTitle && currentTitle && normalizeTitle(realTitle) !== normalizeTitle(currentTitle)) {
+      console.log(`[AntiTranslate] Untranslating video: "${currentTitle}" -> "${realTitle}"`);
+      titleElement.innerText = realTitle;
+      titleElement.title = realTitle;
+      if (linkElement.matches('a#video-title-link')) linkElement.title = realTitle;
+    }
+    video.dataset.ytatUntranslated = 'true';
+  }
+}
+
+// Untranslate other Shorts
+async function untranslateOtherShorts() {
+  const shorts = document.querySelectorAll('div.style-scope.ytd-rich-item-renderer, ytm-shorts-lockup-view-model');
+  for (const short of shorts) {
+    if (short.dataset.ytatUntranslated) continue;
+    const linkElement = short.querySelector('a.shortsLockupViewModelHostEndpoint');
+    const titleElement = short.querySelector('.yt-core-attributed-string.yt-core-attributed-string--white-space-pre-wrap');
+    if (!linkElement || !linkElement.href || !titleElement) {
+      short.dataset.ytatUntranslated = 'checked';
+      continue;
+    }
+
+    const videoIdMatch = linkElement.href.match(/shorts\/([a-zA-Z0-9_-]+)/);
+    if (!videoIdMatch || !videoIdMatch[1]) {
+      short.dataset.ytatUntranslated = 'checked';
+      continue;
+    }
+
+    const response = await fetchOembed(`https://www.youtube.com/oembed?url=https://www.youtube.com/shorts/${videoIdMatch[1]}`);
+    if (!response || !response.title) {
+      short.dataset.ytatUntranslated = 'checked';
+      continue;
+    }
+
+    const realTitle = response.title;
+    const currentTitle = titleElement.textContent.trim();
+    if (realTitle && currentTitle && normalizeTitle(realTitle) !== normalizeTitle(currentTitle)) {
+      console.log(`[AntiTranslate] Untranslating Short: "${currentTitle}" -> "${realTitle}"`);
+      titleElement.textContent = realTitle;
+      if (titleElement.hasAttribute('title')) titleElement.title = realTitle;
+      const titleLink = short.querySelector('a.shortsLockupViewModelHostEndpoint.shortsLockupViewModelHostOutsideMetadataEndpoint');
+      if (titleLink) titleLink.title = realTitle;
+    }
+    short.dataset.ytatUntranslated = 'true';
+  }
+}
+
+// Untranslate audio track
+const ORIGINAL_TRANSLATIONS = ['original', 'оригинал', 'オリジナル', '原始', '원본', 'origineel', 'originale', 'oryginał', 'původní', 'αρχικό', 'orijinal', '原創', 'gốc', 'asli', 'מקורי', 'أصلي'];
+function untranslateAudio() {
+  const playerId = window.location.pathname.startsWith('/shorts') ? '#shorts-player' : '#movie_player';
+  const player = document.querySelector(playerId);
+  if (!player || !player.getAvailableAudioTracks || player.dataset.ytatAudioUntranslated) return;
+
+  const tracks = player.getAvailableAudioTracks();
+  if (!tracks || !Array.isArray(tracks)) return;
+
+  let languageFieldName = null;
+  for (const track of tracks) {
+    if (!track || typeof track !== 'object') continue;
+    for (const [fieldName, field] of Object.entries(track)) {
+      if (field && typeof field === 'object' && field.name) {
+        languageFieldName = fieldName;
+        break;
+      }
+    }
+    if (languageFieldName) break;
+  }
+  if (!languageFieldName) return;
+
+  const originalTrack = tracks.find(track => {
+    if (!track || !track[languageFieldName] || !track[languageFieldName].name) return false;
+    const trackName = track[languageFieldName].name.toLowerCase();
+    return ORIGINAL_TRANSLATIONS.some(word => trackName.includes(word.toLowerCase()));
+  });
+
+  if (originalTrack) {
+    player.setAudioTrack(originalTrack);
+    player.dataset.ytatAudioUntranslated = 'true';
+    console.log('[AntiTranslate] Set audio to original track');
+  }
+}
+
+// Combined mutation handler
+let mutationIdx = 0;
+const MUTATION_UPDATE_STEP = 2;
+async function handleMutations() {
+  if (mutationIdx % MUTATION_UPDATE_STEP !== 0) {
+    mutationIdx++;
+    return;
+  }
+  await Promise.all([
+    untranslateCurrentVideo(),
+    untranslateCurrentShort(),
+    untranslateOtherVideos(),
+    untranslateOtherShorts(),
+    Promise.resolve(untranslateAudio())
+  ]);
+  mutationIdx++;
+}
+
+// Initialize MutationObserver
+const observer = new MutationObserver(handleMutations);
+observer.observe(document.body, { childList: true, subtree: true });
+
+// Run once on load
+handleMutations();
